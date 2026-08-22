@@ -46,3 +46,30 @@ MUXA_BASE_URL=http://localhost:11434/v1 MUXA_MODEL=llava python -m muxa run medi
 ```bash
 python -m pytest        # offline, uses the mock provider
 ```
+
+CI runs the test suite and then the eval gate on every push. The suite covers
+the classifier (extension vs magic-byte disagreements, RIFF-without-WAVE),
+the retry branch (injectable one-shot provider failures), the fallback branch
+(an always-failing provider still yields a result per asset), the validation
+boundary (unknown tasks, empty and oversized text, duplicate paths), and the
+gate itself.
+
+Example ledger from a mixed run:
+
+```json
+{
+  "assets": 4,
+  "tokens": 57,
+  "routes": { "provider": 3, "provider-retry": 1 }
+}
+```
+
+## Design notes
+
+- **Zero runtime dependencies.** Stdlib only (`asyncio`, `urllib`, `hashlib`),
+  so the whole thing is auditable in one sitting.
+- **Failures are data.** A provider error becomes a routed, accounted result,
+  not an exception in a log. The ledger makes silent degradation visible: a
+  spike in `fallback` routes is a monitoring signal.
+- **The eval gate is the contract.** Changing prompts, providers, or routing
+  must keep fixture recall above the threshold or the build fails.
