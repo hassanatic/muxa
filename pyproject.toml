@@ -1,0 +1,8 @@
+[project]
+name = "muxa"
+version = "0.1.0"
+description = "Multimodal orchestration: route mixed media through model calls with retry, fallback and an eval gate"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

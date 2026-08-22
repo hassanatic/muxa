@@ -1,0 +1,6 @@
+{
+  "notes.txt": ["summary", "muxa", "provider"],
+  "report.txt": ["summary", "retry", "orchestrator"],
+  "logo.png": ["caption", "image"],
+  "clip.wav": ["transcript", "audio"]
+}

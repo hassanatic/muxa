@@ -46,6 +46,6 @@ def score(threshold: float = 0.8) -> tuple[float, dict, bool]:
 def main() -> int:
     overall, per_file, ok = score()
     for name, s in sorted(per_file.items()):
-        print(f"{s:４.2f}  {name}" if False else f"{s:0.2f}  {name}")
+        print(f"{s:0.2f}  {name}")
     print(f"overall recall: {overall:0.2f}  ({'PASS' if ok else 'FAIL'})")
     return 0 if ok else 1
