@@ -30,9 +30,9 @@ assets/ ──> discover ──> route by modality ──> task queue
 - Every result records its route: `provider`, `provider-retry`, or `fallback`.
   An asset is never dropped.
 - `python -m muxa eval` replays the labelled fixtures and scores the run on
-  two independent axes: **keyword recall** per modality, and the **fallback
-  rate**. Either one below budget exits non-zero, so quality and reliability
-  regressions fail the build for their own reason.
+  three independent axes: **overall keyword recall**, **per-modality recall**,
+  and the **fallback rate**. Any one below budget exits non-zero, so quality,
+  coverage and reliability regressions each fail the build for their own reason.
 
 ## Usage
 
@@ -72,11 +72,14 @@ Example ledger from a mixed run:
 - **Failures are data.** A provider error becomes a routed, accounted result,
   not an exception in a log. The ledger makes silent degradation visible: a
   spike in `fallback` routes is a monitoring signal.
-- **The eval gate is the contract, on two axes.** Recall alone is an average
-  over files, so a provider that degrades on a single modality can stay above
-  the threshold while quietly serving fallback text for every image. The gate
-  therefore also enforces a fallback-rate budget (0% on the deterministic
-  fixtures). A run that keeps its recall but loses a modality fails on
-  reliability rather than passing by accident — the regression test for this
-  injects an image-only provider outage and asserts recall still passes while
-  the gate does not.
+- **The eval gate is the contract, and an average is the wrong instrument.**
+  A mean over files hides a failure confined to one place, so the gate scores
+  three things and the weakest decides:
+  - **overall recall** — the headline number;
+  - **per-modality recall** — because the fixture corpus is deliberately
+    imbalanced (4 text, 1 image, 1 audio), a dead image modality still leaves
+    the mean at 0.833, above the 0.8 threshold. The global axis passes; only the
+    per-modality floor catches it. Its regression test asserts exactly that
+    asymmetry, so the feature cannot quietly stop earning its place;
+  - **fallback rate** — a provider that degrades silently still answers, so
+    reliability needs its own budget (0% on the deterministic fixtures).

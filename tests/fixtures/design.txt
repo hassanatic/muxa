@@ -1,0 +1,1 @@
+design note: averaging hides a localised failure in one modality

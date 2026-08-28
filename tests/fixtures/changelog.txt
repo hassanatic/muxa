@@ -1,0 +1,1 @@
+changelog entry: per-modality recall floor added to the eval gate

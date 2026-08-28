@@ -59,3 +59,47 @@ def test_clean_run_reports_a_zero_fallback_rate(monkeypatch):
     _, per_file, ok, stats = score()
     assert stats["fallback_rate"] == 0.0
     assert ok
+
+
+def test_per_modality_floor_catches_a_collapse_the_global_mean_hides(monkeypatch):
+    """A weak modality must fail on its own, not be carried by stronger ones.
+
+    This provider answers image jobs successfully but with useless text, so
+    nothing routes to fallback and the reliability axis stays clean. The fixture
+    corpus is deliberately imbalanced (4 text, 1 image, 1 audio), so one dead
+    modality leaves the global mean at 0.833 - still above the 0.8 threshold.
+    The global axis therefore PASSES and only the per-modality floor sees it.
+
+    That imbalance is the point: with a balanced 4-file corpus the mean drops to
+    0.75 and the global threshold catches the collapse by luck, which would make
+    this feature look unnecessary.
+    """
+    monkeypatch.delenv("MUXA_BASE_URL", raising=False)
+
+    class ImageAnswersUselessly(MockProvider):
+        async def run(self, job):
+            if job.asset.modality == "image":
+                return "ok", 8          # succeeds, but contains no expected keyword
+            return await super().run(job)
+
+    overall, per_file, ok, stats = score(provider=ImageAnswersUselessly())
+
+    assert stats["fallback_rate"] == 0.0          # reliability axis is clean
+    assert stats["recall_ok"]                     # the GLOBAL mean still passes (0.833)
+    assert overall >= 0.8
+    assert stats["per_modality"]["image"] == 0.0  # the collapse is real
+    assert stats["per_modality"]["text"] == 1.0   # and localised
+    assert not stats["modality_ok"]               # only the per-modality floor catches it
+    assert not ok
+
+    # Relaxing only the per-modality floor makes the same run pass, which pins
+    # WHICH axis rejected it.
+    assert score(provider=ImageAnswersUselessly(), min_per_modality=0.0)[3]["modality_ok"] is True
+
+
+def test_clean_run_reports_every_modality(monkeypatch):
+    monkeypatch.delenv("MUXA_BASE_URL", raising=False)
+    _, _, ok, stats = score()
+    assert ok
+    assert set(stats["per_modality"]) == {"text", "image", "audio"}
+    assert stats["weakest_modality_recall"] == 1.0

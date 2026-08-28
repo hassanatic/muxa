@@ -1,6 +1,30 @@
 {
-  "notes.txt": ["summary", "muxa", "provider"],
-  "report.txt": ["summary", "retry", "orchestrator"],
-  "logo.png": ["caption", "image"],
-  "clip.wav": ["transcript", "audio"]
+  "notes.txt": [
+    "summary",
+    "muxa",
+    "provider"
+  ],
+  "report.txt": [
+    "summary",
+    "retry",
+    "orchestrator"
+  ],
+  "logo.png": [
+    "caption",
+    "image"
+  ],
+  "clip.wav": [
+    "transcript",
+    "audio"
+  ],
+  "changelog.txt": [
+    "summary",
+    "changelog",
+    "gate"
+  ],
+  "design.txt": [
+    "summary",
+    "design",
+    "modality"
+  ]
 }
