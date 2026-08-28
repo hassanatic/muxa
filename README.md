@@ -29,9 +29,10 @@ assets/ ──> discover ──> route by modality ──> task queue
   transcribed (described via metadata when no real provider is configured).
 - Every result records its route: `provider`, `provider-retry`, or `fallback`.
   An asset is never dropped.
-- `python -m muxa eval` replays the labelled fixtures and reports
-  keyword-recall per modality with a non-zero exit code below the threshold,
-  so quality regressions fail the build.
+- `python -m muxa eval` replays the labelled fixtures and scores the run on
+  two independent axes: **keyword recall** per modality, and the **fallback
+  rate**. Either one below budget exits non-zero, so quality and reliability
+  regressions fail the build for their own reason.
 
 ## Usage
 
@@ -71,5 +72,11 @@ Example ledger from a mixed run:
 - **Failures are data.** A provider error becomes a routed, accounted result,
   not an exception in a log. The ledger makes silent degradation visible: a
   spike in `fallback` routes is a monitoring signal.
-- **The eval gate is the contract.** Changing prompts, providers, or routing
-  must keep fixture recall above the threshold or the build fails.
+- **The eval gate is the contract, on two axes.** Recall alone is an average
+  over files, so a provider that degrades on a single modality can stay above
+  the threshold while quietly serving fallback text for every image. The gate
+  therefore also enforces a fallback-rate budget (0% on the deterministic
+  fixtures). A run that keeps its recall but loses a modality fails on
+  reliability rather than passing by accident — the regression test for this
+  injects an image-only provider outage and asserts recall still passes while
+  the gate does not.
