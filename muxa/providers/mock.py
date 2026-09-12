@@ -35,8 +35,15 @@ class MockProvider:
         digest = hashlib.sha256(path.encode()).hexdigest()[:8]
         kind = _PROMPT_WORDS[job.task]
         if job.task == "summarize":
-            with open(path, "r", errors="ignore") as f:
-                first_line = (f.readline() or "").strip()[:80]
+            if job.input_text is not None:
+                # Chained stage: answer from the upstream text, NOT the file.
+                # Reading the file here would silently make the chain a lie --
+                # it would look like a second stage while summarising the raw
+                # bytes the first stage already consumed.
+                first_line = job.input_text.strip()[:80]
+            else:
+                with open(path, "r", errors="ignore") as f:
+                    first_line = (f.readline() or "").strip()[:80]
             text = f"{kind} of {stem}: {first_line or 'empty file'}"
         else:
             text = f"{kind} of {stem} ({job.asset.modality}, {job.asset.size_bytes} bytes, {digest})"

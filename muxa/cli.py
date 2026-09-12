@@ -16,7 +16,7 @@ from .validate import validate_all
 CACHE_PATH = os.path.join(".muxa-cache", "results.json")
 
 
-def run(root: str, use_cache: bool = True) -> int:
+def run(root: str, use_cache: bool = True, chain: bool = False) -> int:
     assets = discover(root)
     if not assets:
         print(f"no classifiable assets under {root}")
@@ -24,7 +24,8 @@ def run(root: str, use_cache: bool = True) -> int:
     jobs = plan(assets)
     provider = from_env()
     cache = ResultCache(CACHE_PATH) if use_cache else None
-    results = validate_all(asyncio.run(run_jobs(provider, jobs, cache=cache)))
+    results = validate_all(asyncio.run(
+        run_jobs(provider, jobs, cache=cache, chain=chain)))
     if cache is not None:
         # Saved after the run, not per result: one atomic write, and an
         # interrupted run simply keeps the previous cache intact.
@@ -44,13 +45,14 @@ def main() -> int:
     argv = sys.argv[1:]
     if argv and argv[0] == "run" and len(argv) >= 2:
         use_cache = "--no-cache" not in argv
+        chain = "--chain" in argv
         root = next((a for a in argv[1:] if not a.startswith("-")), None)
         if root is None:
-            print("usage: python -m muxa run <dir> [--no-cache]")
+            print("usage: python -m muxa run <dir> [--no-cache] [--chain]")
             return 2
-        return run(root, use_cache=use_cache)
+        return run(root, use_cache=use_cache, chain=chain)
     if argv and argv[0] == "eval":
         from .evalgate import main as eval_main
         return eval_main()
-    print("usage: python -m muxa run <dir> [--no-cache] | python -m muxa eval")
+    print("usage: python -m muxa run <dir> [--no-cache] [--chain] | python -m muxa eval")
     return 2

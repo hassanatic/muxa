@@ -32,6 +32,10 @@ assets/ ──> discover ──> route by modality ──> task queue
 - Finished work is cached **by content**, so a second run over the same folder
   skips what is already done. A long run becomes resumable instead of
   all-or-nothing.
+- `--chain` adds a second stage for modalities that have no single useful
+  answer: audio is transcribed, then that **transcript** is summarised. If the
+  first stage failed, the second one refuses rather than summarising an error
+  message.
 - `python -m muxa eval` replays the labelled fixtures and scores the run on
   three independent axes: **overall keyword recall**, **per-modality recall**,
   and the **fallback rate**. Any one below budget exits non-zero, so quality,
@@ -62,6 +66,23 @@ $ python -m muxa run tests/fixtures
 `tokens` is what the run actually spent; `tokens_saved` is what the hits
 avoided. They are deliberately separate numbers, so spend is never inflated by
 work that did not happen.
+
+### Chained tasks
+
+```
+$ python -m muxa run media/ --chain
+clip.wav   task=summarize  route=provider
+   upstream: transcript of clip (audio, 204 bytes, f71aa946)
+   final   : summary of clip: transcript of clip (audio, 204 bytes, …)
+```
+
+A transcript is raw material, not an answer, so audio runs `transcribe` and then
+summarises **that text** rather than the file again. One result comes back per
+asset — the final stage — with the intermediate kept in `upstream_text` so it
+stays auditable.
+
+Only audio is chained. An image caption is already a summary, and summarising a
+summary adds nothing but a second chance to hallucinate.
 
 ## Development
 
@@ -104,6 +125,16 @@ Example ledger from a mixed run:
   of the key, so the same bytes answered by a different model is a different
   entry, and a corrupt cache file is treated as empty rather than fatal: the
   cache is an optimisation, never the record.
+- **A chain refuses rather than summarising a failure.** This is the whole
+  reason chaining is a feature and not a second loop. Fallback text reads
+  *"transcribe unavailable for clip.wav: audio file, 40000 bytes"*. Feed that to
+  a summariser and you do not get a degraded summary, you get a **confident
+  summary of an error message** — indistinguishable downstream from a real one,
+  and it costs a model call to manufacture. So a second stage whose upstream
+  degraded is recorded as `blocked-upstream`, spends zero tokens, and keeps the
+  failed upstream text for audit. That route counts toward the eval gate's
+  reliability budget, because a refusal is a degradation of the run and hiding
+  it there would let a whole modality go dark while the number stayed at zero.
 - **The eval gate runs without the cache, deliberately.** A cached gate run
   would replay stored text instead of exercising the provider, so it would keep
   passing against yesterday's answers while a real regression shipped, and the

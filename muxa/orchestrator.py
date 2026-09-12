@@ -12,12 +12,13 @@ Design rules:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 from dataclasses import asdict, dataclass
 
 from .cache import ResultCache, content_digest, key_for
 from .providers.base import Provider, ProviderError
-from .router import Job
+from .router import Job, chained_task
 
 
 @dataclass(frozen=True)
@@ -27,7 +28,17 @@ class Result:
     task: str
     text: str
     route: str          # "provider" | "provider-retry" | "fallback" | "cache"
+                        # | "blocked-upstream"
     tokens: int
+    # For a chained result, the first stage's text, kept so the intermediate is
+    # auditable rather than thrown away. None for a single-stage result.
+    upstream_text: str | None = None
+
+
+# Routes that mean "the pipeline did not get a real answer from the provider".
+# `blocked-upstream` belongs here: the second stage of a chain never ran, so
+# counting it as anything other than a degradation would let a failure hide.
+DEGRADED_ROUTES = frozenset({"fallback", "blocked-upstream"})
 
 
 def _fallback_text(job: Job) -> str:
@@ -41,11 +52,20 @@ def _cache_key(job: Job, provider: Provider) -> str | None:
 
     An unreadable file is not a cache miss to be stored later; it is a job that
     must go down the normal path and be answered or fall back on its own.
+
+    A CHAINED job's real input is `input_text`, not the file, so the upstream
+    text is folded into the key. Without that, a second-stage summary keyed only
+    on (file, task, provider) would be served from cache even after the upstream
+    transcript changed -- a stale answer that looks like a hit. The file digest
+    stays in the key too, so the entry is still tied to the asset it describes.
     """
     try:
         digest = content_digest(job.asset.path)
     except OSError:
         return None
+    if job.input_text is not None:
+        digest = hashlib.sha256(
+            (digest + "\0" + job.input_text).encode()).hexdigest()
     return key_for(digest, job.task, getattr(provider, "name", "unknown"))
 
 
@@ -77,15 +97,59 @@ async def _run_one(provider: Provider, job: Job,
                   _fallback_text(job), "fallback", 0)
 
 
+def _chain_blocked(first: Result, task: str) -> Result:
+    """Second stage refused because the first stage did not produce real output.
+
+    THIS IS THE POINT OF THE FEATURE, not an edge case. A fallback text reads
+    "transcribe unavailable for clip.wav: audio file, 40000 bytes". Feeding that
+    to a summariser does not produce a degraded summary, it produces a CONFIDENT
+    SUMMARY OF AN ERROR MESSAGE, which is indistinguishable downstream from a
+    real one and costs a model call to manufacture. Refusing is strictly better
+    than answering from garbage.
+    """
+    return Result(first.path, first.modality, task,
+                  f"{task} not attempted: upstream {first.task} produced no usable text",
+                  "blocked-upstream", 0, upstream_text=first.text)
+
+
 async def run_jobs(provider: Provider, jobs: list[Job], concurrency: int = 4,
-                   cache: ResultCache | None = None) -> list[Result]:
+                   cache: ResultCache | None = None,
+                   chain: bool = False) -> list[Result]:
     sem = asyncio.Semaphore(max(1, concurrency))
 
     async def guarded(job: Job) -> Result:
         async with sem:
             return await _run_one(provider, job, cache)
 
-    return list(await asyncio.gather(*(guarded(j) for j in jobs)))
+    first = list(await asyncio.gather(*(guarded(j) for j in jobs)))
+    if not chain:
+        return first
+
+    # Second stage. Only assets whose modality declares a follow-on task, and
+    # only where the first stage actually answered. Order is preserved because
+    # each result keeps its index.
+    out: list[Result] = []
+    pending: list[tuple[int, Job, Result]] = []
+    for i, r in enumerate(first):
+        task = chained_task(r.modality)
+        if task is None:
+            out.append(r)
+            continue
+        out.append(r)  # placeholder, replaced below
+        if r.route in DEGRADED_ROUTES:
+            out[i] = _chain_blocked(r, task)
+            continue
+        pending.append((i, Job(asset=jobs[i].asset, task=task, input_text=r.text), r))
+
+    async def second(idx: int, job: Job, upstream: Result) -> tuple[int, Result]:
+        async with sem:
+            res = await _run_one(provider, job, cache)
+        return idx, Result(res.path, res.modality, res.task, res.text,
+                           res.route, res.tokens, upstream_text=upstream.text)
+
+    for idx, res in await asyncio.gather(*(second(i, j, u) for i, j, u in pending)):
+        out[idx] = res
+    return out
 
 
 def ledger(results: list[Result], cache: ResultCache | None = None) -> dict:

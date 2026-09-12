@@ -24,7 +24,7 @@ import json
 import os
 
 from .assets import discover
-from .orchestrator import ledger, run_jobs
+from .orchestrator import DEGRADED_ROUTES, ledger, run_jobs
 from .providers import from_env
 from .router import plan
 from .validate import validate_all
@@ -52,11 +52,17 @@ MIN_PER_MODALITY_RECALL = 0.8
 
 
 def fallback_rate(results) -> float:
-    """Share of results that fell through to the deterministic fallback."""
+    """Share of results the provider did not actually answer.
+
+    Counts every DEGRADED_ROUTES member, not just `fallback`. When chaining is
+    on, a second stage that refused because its upstream failed is recorded as
+    `blocked-upstream`; that is a degradation of the run and counting only
+    `fallback` would let a whole modality go dark while this number stayed 0.
+    """
     if not results:
         return 0.0
     routes = ledger(results)["routes"]
-    return routes.get("fallback", 0) / len(results)
+    return sum(routes.get(r, 0) for r in DEGRADED_ROUTES) / len(results)
 
 
 def score(threshold: float = 0.8,
