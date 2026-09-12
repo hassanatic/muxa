@@ -27,8 +27,11 @@ assets/ ──> discover ──> route by modality ──> task queue
 
 - **Text** files are summarised, **images** are captioned, **audio** is
   transcribed (described via metadata when no real provider is configured).
-- Every result records its route: `provider`, `provider-retry`, or `fallback`.
-  An asset is never dropped.
+- Every result records its route: `provider`, `provider-retry`, `cache`, or
+  `fallback`. An asset is never dropped.
+- Finished work is cached **by content**, so a second run over the same folder
+  skips what is already done. A long run becomes resumable instead of
+  all-or-nothing.
 - `python -m muxa eval` replays the labelled fixtures and scores the run on
   three independent axes: **overall keyword recall**, **per-modality recall**,
   and the **fallback rate**. Any one below budget exits non-zero, so quality,
@@ -37,10 +40,28 @@ assets/ ──> discover ──> route by modality ──> task queue
 ## Usage
 
 ```bash
-python -m muxa run path/to/folder          # writes results.json
+python -m muxa run path/to/folder          # writes results.json, caches results
+python -m muxa run path/to/folder --no-cache
 python -m muxa eval                        # scores against tests/fixtures
 MUXA_BASE_URL=http://localhost:11434/v1 MUXA_MODEL=llava python -m muxa run media/
 ```
+
+Run the same folder twice and the second pass costs nothing:
+
+```
+$ python -m muxa run tests/fixtures
+{ "assets": 7, "tokens": 103, "routes": { "provider": 7 },
+  "cache": { "hits": 0, "tokens_saved": 0, "entries": 7 } }
+
+$ python -m muxa run tests/fixtures
+{ "assets": 7, "tokens": 0, "routes": { "cache": 7 },
+  "cache": { "hits": 7, "tokens_saved": 103, "entries": 7 } }
+7 cached, 103 tokens not spent again
+```
+
+`tokens` is what the run actually spent; `tokens_saved` is what the hits
+avoided. They are deliberately separate numbers, so spend is never inflated by
+work that did not happen.
 
 ## Development
 
@@ -52,8 +73,10 @@ CI runs the test suite and then the eval gate on every push. The suite covers
 the classifier (extension vs magic-byte disagreements, RIFF-without-WAVE),
 the retry branch (injectable one-shot provider failures), the fallback branch
 (an always-failing provider still yields a result per asset), the validation
-boundary (unknown tasks, empty and oversized text, duplicate paths), and the
-gate itself.
+boundary (unknown tasks, empty and oversized text, duplicate paths), the cache
+(a hit skips the provider entirely, a fallback is never written, an edit misses
+and a rename hits, a corrupt file is survivable, and a different provider is a
+different key), and the gate itself.
 
 Example ledger from a mixed run:
 
@@ -72,6 +95,21 @@ Example ledger from a mixed run:
 - **Failures are data.** A provider error becomes a routed, accounted result,
   not an exception in a log. The ledger makes silent degradation visible: a
   spike in `fallback` routes is a monitoring signal.
+- **The cache is addressed by content, and a fallback is never written to it.**
+  Keying on bytes rather than path means a rename is free and an edit correctly
+  redoes the work. The rule that matters more is the exclusion: fallback text is
+  what the pipeline produces when a provider is down, so caching it would freeze
+  that outage on disk and every later run would serve it as a hit. Only genuine
+  provider answers are stored. The provider name and a schema version are part
+  of the key, so the same bytes answered by a different model is a different
+  entry, and a corrupt cache file is treated as empty rather than fatal: the
+  cache is an optimisation, never the record.
+- **The eval gate runs without the cache, deliberately.** A cached gate run
+  would replay stored text instead of exercising the provider, so it would keep
+  passing against yesterday's answers while a real regression shipped, and the
+  fallback budget would go quiet too, because a hit is neither a provider call
+  nor a fallback. The optimisation is for production; the gate has to be fooled
+  by nothing.
 - **The eval gate is the contract, and an average is the wrong instrument.**
   A mean over files hides a failure confined to one place, so the gate scores
   three things and the weakest decides:

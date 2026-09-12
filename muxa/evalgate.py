@@ -36,6 +36,14 @@ EXPECTED = os.path.join(FIXTURES, "expected.json")
 # A fixture run uses the deterministic mock, so every asset should come back on
 # the `provider` route. Anything else means the pipeline degraded; allow nothing
 # by default and let a caller widen it deliberately.
+#
+# ⚠️ THE GATE MUST NEVER RUN WITH A CACHE. `score()` calls `run_jobs` without
+# one on purpose. A cached run replays stored text instead of exercising the
+# provider, so the gate would keep passing against yesterday's answers while a
+# real regression shipped — and this fallback budget would go quiet too, because
+# a cache hit is neither a provider call nor a fallback. The cache is a
+# production optimisation; the gate is the thing that has to be fooled by
+# nothing.
 MAX_FALLBACK_RATE = 0.0
 
 # Every modality must clear the bar on its own. A global mean lets a strong

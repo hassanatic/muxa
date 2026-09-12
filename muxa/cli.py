@@ -1,39 +1,56 @@
-"""muxa command line: `run <dir>` and `eval`."""
+"""muxa command line: `run <dir> [--no-cache]` and `eval`."""
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 
 from .assets import discover
+from .cache import ResultCache
 from .orchestrator import ledger, run_jobs, to_dicts
 from .providers import from_env
 from .router import plan
 from .validate import validate_all
 
+CACHE_PATH = os.path.join(".muxa-cache", "results.json")
 
-def run(root: str) -> int:
+
+def run(root: str, use_cache: bool = True) -> int:
     assets = discover(root)
     if not assets:
         print(f"no classifiable assets under {root}")
         return 1
     jobs = plan(assets)
     provider = from_env()
-    results = validate_all(asyncio.run(run_jobs(provider, jobs)))
-    out = {"provider": provider.name, "ledger": ledger(results),
+    cache = ResultCache(CACHE_PATH) if use_cache else None
+    results = validate_all(asyncio.run(run_jobs(provider, jobs, cache=cache)))
+    if cache is not None:
+        # Saved after the run, not per result: one atomic write, and an
+        # interrupted run simply keeps the previous cache intact.
+        cache.save()
+    out = {"provider": provider.name, "ledger": ledger(results, cache),
            "results": to_dicts(results)}
     with open("results.json", "w") as f:
         json.dump(out, f, indent=2)
     print(json.dumps(out["ledger"], indent=2))
+    if cache is not None and cache.hits:
+        print(f"{cache.hits} cached, {cache.saved_tokens} tokens not spent again")
     print(f"{len(results)} results -> results.json")
     return 0
 
 
 def main() -> int:
-    if len(sys.argv) >= 3 and sys.argv[1] == "run":
-        return run(sys.argv[2])
-    if len(sys.argv) >= 2 and sys.argv[1] == "eval":
+    argv = sys.argv[1:]
+    if argv and argv[0] == "run" and len(argv) >= 2:
+        use_cache = "--no-cache" not in argv
+        root = next((a for a in argv[1:] if not a.startswith("-")), None)
+        if root is None:
+            print("usage: python -m muxa run <dir> [--no-cache]")
+            return 2
+        return run(root, use_cache=use_cache)
+    if argv and argv[0] == "eval":
         from .evalgate import main as eval_main
         return eval_main()
-    print("usage: python -m muxa run <dir> | python -m muxa eval")
+    print("usage: python -m muxa run <dir> [--no-cache] | python -m muxa eval")
     return 2
