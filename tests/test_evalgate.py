@@ -2,6 +2,7 @@ import json
 import os
 
 from muxa.cli import run as cli_run
+from muxa import evalgate
 from muxa.evalgate import score
 from muxa.providers import MockProvider, ProviderError
 
@@ -103,3 +104,58 @@ def test_clean_run_reports_every_modality(monkeypatch):
     assert ok
     assert set(stats["per_modality"]) == {"text", "image", "audio"}
     assert stats["weakest_modality_recall"] == 1.0
+
+
+def test_eval_json_emits_only_a_parseable_record(monkeypatch, capsys):
+    monkeypatch.delenv("MUXA_BASE_URL", raising=False)
+    rc = evalgate.main(["--json"])
+    assert rc == 0
+    # The whole of stdout must parse. A header line printed alongside the record
+    # would make `muxa eval --json > gate.json` produce an unreadable file.
+    record = json.loads(capsys.readouterr().out)
+    assert record["ok"] is True
+    assert record["version"] == evalgate.REPORT_VERSION
+    assert set(record["checks"]) == {"recall_ok", "modality_ok", "fallback_ok"}
+    assert set(record["per_modality_recall"]) == {"audio", "image", "text"}
+
+
+def test_record_carries_the_thresholds_it_was_judged_against(monkeypatch):
+    monkeypatch.delenv("MUXA_BASE_URL", raising=False)
+    overall, per_file, ok, stats = evalgate.score()
+    record = evalgate.report(overall, per_file, ok, stats)
+    # An archived measurement without its bar cannot be re-checked later.
+    assert record["thresholds"] == {
+        "overall_recall": evalgate.MIN_OVERALL_RECALL,
+        "per_modality_recall": evalgate.MIN_PER_MODALITY_RECALL,
+        "max_fallback_rate": evalgate.MAX_FALLBACK_RATE,
+    }
+
+
+def test_printed_floor_tracks_the_applied_floor(monkeypatch, capsys):
+    """The displayed PASS/FAIL and the decision must share one source.
+
+    Two defects at once if they do not. `main` used to compare each modality
+    against the module constant while the verdict came from `score`, so the two
+    could disagree; and `score` took its thresholds as DEFAULT ARGUMENTS, which
+    Python binds at definition time, so raising the constant here would not have
+    reached the gate at all. Raising it above 1.0 must now flip the result and
+    change the printed floor together.
+    """
+    monkeypatch.delenv("MUXA_BASE_URL", raising=False)
+    monkeypatch.setattr(evalgate, "MIN_PER_MODALITY_RECALL", 1.5)
+    rc = evalgate.main([])
+    out = capsys.readouterr().out
+    assert rc == 1, "an unreachable floor must fail the gate"
+    assert "floor 1.50" in out, "the printed floor must be the applied one"
+    assert "FAIL" in out
+
+
+def test_json_exit_code_still_reports_failure(monkeypatch, capsys):
+    monkeypatch.delenv("MUXA_BASE_URL", raising=False)
+    monkeypatch.setattr(evalgate, "MAX_FALLBACK_RATE", -1.0)
+    rc = evalgate.main(["--json"])
+    record = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert record["ok"] is False
+    assert record["checks"]["fallback_ok"] is False
+    assert record["thresholds"]["max_fallback_rate"] == -1.0

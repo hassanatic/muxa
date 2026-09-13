@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 
 from .assets import discover
 from .orchestrator import DEGRADED_ROUTES, ledger, run_jobs
@@ -65,16 +66,36 @@ def fallback_rate(results) -> float:
     return sum(routes.get(r, 0) for r in DEGRADED_ROUTES) / len(results)
 
 
-def score(threshold: float = 0.8,
-          max_fallback: float = MAX_FALLBACK_RATE,
-          min_per_modality: float = MIN_PER_MODALITY_RECALL,
+MIN_OVERALL_RECALL = 0.8
+
+# Schema version for the --json record. Bump it when a key changes meaning, so
+# an archived artifact can never be silently misread by a newer reader.
+REPORT_VERSION = 1
+
+
+def score(threshold: float | None = None,
+          max_fallback: float | None = None,
+          min_per_modality: float | None = None,
           provider=None) -> tuple[float, dict, bool, dict]:
     """Return (overall recall, per-file recall, pass/fail, run stats).
 
     `per_file` stays a pure file -> recall mapping; reliability numbers travel
     in `stats` so callers can assert on either axis without one polluting the
     other.
+
+    The thresholds default to None rather than to the module constants, and are
+    resolved at CALL time. A default argument is bound once when the function is
+    defined, so `threshold: float = MIN_OVERALL_RECALL` would freeze the value
+    at import and quietly ignore any later change to the constant - including
+    one a test makes to prove the gate reacts to it. Late binding keeps the
+    constants the single source of truth.
     """
+    if threshold is None:
+        threshold = MIN_OVERALL_RECALL
+    if max_fallback is None:
+        max_fallback = MAX_FALLBACK_RATE
+    if min_per_modality is None:
+        min_per_modality = MIN_PER_MODALITY_RECALL
     with open(EXPECTED) as f:
         expected: dict[str, list[str]] = json.load(f)
 
@@ -113,19 +134,74 @@ def score(threshold: float = 0.8,
         "recall_ok": overall >= threshold,
         "modality_ok": weakest >= min_per_modality,
         "fallback_ok": fb <= max_fallback,
+        # The thresholds ACTUALLY APPLIED travel with the numbers they judged.
+        # A measurement archived without its threshold cannot be checked later:
+        # "recall 0.83" is a pass or a fail depending on a bar the record does
+        # not contain, and a reader would have to guess which constant was in
+        # force on the day. This is also the single source the human output
+        # reads, so the printed floor can never drift from the decided one.
+        "thresholds": {
+            "overall_recall": threshold,
+            "per_modality_recall": min_per_modality,
+            "max_fallback_rate": max_fallback,
+        },
     }
     ok = stats["recall_ok"] and stats["modality_ok"] and stats["fallback_ok"]
     return overall, per_file, ok, stats
 
 
-def main() -> int:
+def report(overall: float, per_file: dict, ok: bool, stats: dict) -> dict:
+    """The gate decision as an archivable record.
+
+    Emitted by `--json` so CI can publish it as an artifact and a later run can
+    diff against it. It deliberately carries the thresholds as well as the
+    measurements: a number is only falsifiable next to the bar it was judged by.
+    """
+    return {
+        "version": REPORT_VERSION,
+        "ok": ok,
+        "overall_recall": overall,
+        "per_file_recall": per_file,
+        "per_modality_recall": stats["per_modality"],
+        "weakest_modality_recall": stats["weakest_modality_recall"],
+        "fallback_rate": stats["fallback_rate"],
+        "assets": stats["assets"],
+        "checks": {
+            "recall_ok": stats["recall_ok"],
+            "modality_ok": stats["modality_ok"],
+            "fallback_ok": stats["fallback_ok"],
+        },
+        "thresholds": stats["thresholds"],
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    as_json = "--json" in argv
     overall, per_file, ok, stats = score()
+    floors = stats["thresholds"]
+
+    if as_json:
+        # Only the record goes to stdout, so `muxa eval --json > gate.json`
+        # yields a parseable file rather than a file with a header glued on.
+        print(json.dumps(report(overall, per_file, ok, stats), indent=2,
+                         sort_keys=True))
+        return 0 if ok else 1
+
     for name, s in sorted(per_file.items()):
         print(f"{s:0.2f}  {name}")
-    print(f"overall recall: {overall:0.2f}  ({'PASS' if stats['recall_ok'] else 'FAIL'})")
+    print(f"overall recall: {overall:0.2f}  "
+          f"({'PASS' if stats['recall_ok'] else 'FAIL'}, "
+          f"floor {floors['overall_recall']:0.2f})")
     for mod, s in sorted(stats["per_modality"].items()):
-        mark = "PASS" if s >= MIN_PER_MODALITY_RECALL else "FAIL"
-        print(f"  {mod:<6} recall: {s:0.2f}  ({mark}, floor {MIN_PER_MODALITY_RECALL:0.2f})")
+        # Compared against the APPLIED floor, not the module constant. Reading
+        # the constant here would let the printed PASS/FAIL disagree with
+        # stats["modality_ok"] whenever a caller passed its own threshold - a
+        # displayed verdict sourced separately from the decided one.
+        mark = "PASS" if s >= floors["per_modality_recall"] else "FAIL"
+        print(f"  {mod:<6} recall: {s:0.2f}  "
+              f"({mark}, floor {floors['per_modality_recall']:0.2f})")
     print(f"fallback rate:  {stats['fallback_rate']:0.2f}  "
-          f"({'PASS' if stats['fallback_ok'] else 'FAIL'}, budget {MAX_FALLBACK_RATE:0.2f})")
+          f"({'PASS' if stats['fallback_ok'] else 'FAIL'}, "
+          f"budget {floors['max_fallback_rate']:0.2f})")
     return 0 if ok else 1

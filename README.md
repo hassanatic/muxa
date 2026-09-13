@@ -40,6 +40,8 @@ assets/ ──> discover ──> route by modality ──> task queue
   three independent axes: **overall keyword recall**, **per-modality recall**,
   and the **fallback rate**. Any one below budget exits non-zero, so quality,
   coverage and reliability regressions each fail the build for their own reason.
+  `--json` prints the decision as a record instead of a table, so CI can publish
+  it as an artifact and a later run can diff against it.
 
 ## Usage
 
@@ -47,6 +49,7 @@ assets/ ──> discover ──> route by modality ──> task queue
 python -m muxa run path/to/folder          # writes results.json, caches results
 python -m muxa run path/to/folder --no-cache
 python -m muxa eval                        # scores against tests/fixtures
+python -m muxa eval --json > gate.json     # same gate, archivable record
 MUXA_BASE_URL=http://localhost:11434/v1 MUXA_MODEL=llava python -m muxa run media/
 ```
 
@@ -90,7 +93,8 @@ summary adds nothing but a second chance to hallucinate.
 python -m pytest        # offline, uses the mock provider
 ```
 
-CI runs the test suite and then the eval gate on every push. The suite covers
+CI runs the test suite and then the eval gate on every push, and uploads the
+gate's `--json` record as an artifact. The suite covers
 the classifier (extension vs magic-byte disagreements, RIFF-without-WAVE),
 the retry branch (injectable one-shot provider failures), the fallback branch
 (an always-failing provider still yields a result per asset), the validation
@@ -141,6 +145,18 @@ Example ledger from a mixed run:
   fallback budget would go quiet too, because a hit is neither a provider call
   nor a fallback. The optimisation is for production; the gate has to be fooled
   by nothing.
+- **A measurement is archived with the bar it was judged by.** The `--json`
+  record carries the thresholds actually applied, not just the numbers. "Recall
+  0.83" is a pass or a fail depending on a floor the record would otherwise not
+  contain, so a reader months later would have to guess which constant was in
+  force. The same dict is what the human output prints, which means the shown
+  floor cannot drift from the decided one - it used to read a module constant
+  while the verdict came from the scorer, so the two could disagree whenever a
+  caller supplied its own threshold. Relatedly, the thresholds are resolved when
+  `score()` is CALLED rather than as default arguments: Python binds a default
+  once at definition, so a test that raises a constant to prove the gate reacts
+  would have been ignored entirely.
+
 - **The eval gate is the contract, and an average is the wrong instrument.**
   A mean over files hides a failure confined to one place, so the gate scores
   three things and the weakest decides:

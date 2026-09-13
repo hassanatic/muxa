@@ -16,3 +16,12 @@ jobs:
       - run: pip install pytest
       - run: pytest -q
       - run: python -m muxa eval
+      # The same gate again as a machine-readable record, published so a later
+      # run can diff against it. It carries the thresholds alongside the
+      # measurements, so an archived result stays checkable on its own.
+      - run: python -m muxa eval --json > gate.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-gate
+          path: gate.json

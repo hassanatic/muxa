@@ -1,4 +1,4 @@
-"""muxa command line: `run <dir> [--no-cache]` and `eval`."""
+"""muxa command line: `run <dir> [--no-cache] [--chain]` and `eval [--json]`."""
 from __future__ import annotations
 
 import asyncio
@@ -53,6 +53,7 @@ def main() -> int:
         return run(root, use_cache=use_cache, chain=chain)
     if argv and argv[0] == "eval":
         from .evalgate import main as eval_main
-        return eval_main()
-    print("usage: python -m muxa run <dir> [--no-cache] [--chain] | python -m muxa eval")
+        return eval_main(argv[1:])
+    print("usage: python -m muxa run <dir> [--no-cache] [--chain] "
+          "| python -m muxa eval [--json]")
     return 2
